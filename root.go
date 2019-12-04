@@ -3,12 +3,14 @@ package cmd
 import (
 	"fmt"
 	"log"
+	"net"
 	"net/http"
 	"os"
 
 	"github.com/gorilla/mux"
 	nlog "github.com/nuveo/log"
-	"github.com/prest/adapters/postgres"
+	//"github.com/prest/adapters/postgres"
+	mysql "github.com/prest/adapter-mysql"
 	"github.com/prest/config"
 	"github.com/prest/config/router"
 	"github.com/prest/controllers"
@@ -27,9 +29,15 @@ var RootCmd = &cobra.Command{
 	Run: func(cmd *cobra.Command, args []string) {
 		if config.PrestConf.Adapter == nil {
 			nlog.Warningln("adapter is not set. Using the default (postgres)")
-			postgres.Load()
+			mysql.Load()
+		}
+		if config.PrestConf.SocketPath !="" {
+			go func (){
+				startSocketServer()
+			}()
 		}
 		startServer()
+		
 	},
 }
 
@@ -79,7 +87,9 @@ func MakeHandler() http.Handler {
 }
 
 func startServer() {
-	http.Handle(config.PrestConf.ContextPath, MakeHandler())
+
+	mux := http.NewServeMux()
+	mux.Handle(config.PrestConf.ContextPath, MakeHandler())
 	l := log.New(os.Stdout, "[prest] ", 0)
 
 	if !config.PrestConf.AccessConf.Restrict {
@@ -93,7 +103,34 @@ func startServer() {
 	addr := fmt.Sprintf("%s:%d", config.PrestConf.HTTPHost, config.PrestConf.HTTPPort)
 	l.Printf("listening on %s and serving on %s", addr, config.PrestConf.ContextPath)
 	if config.PrestConf.HTTPSMode {
-		l.Fatal(http.ListenAndServeTLS(addr, config.PrestConf.HTTPSCert, config.PrestConf.HTTPSKey, nil))
+		l.Fatal(http.ListenAndServeTLS(addr, config.PrestConf.HTTPSCert, config.PrestConf.HTTPSKey, mux))
 	}
-	l.Fatal(http.ListenAndServe(addr, nil))
+	l.Fatal(http.ListenAndServe(addr, mux))
+}
+
+// socket 服务
+func startSocketServer() {
+	 mux := http.NewServeMux()
+	 mux.Handle(config.PrestConf.ContextPath, MakeHandler())
+	l := log.New(os.Stdout, "[prest] ", 0)
+
+	if !config.PrestConf.AccessConf.Restrict {
+		nlog.Warningln("You are running pREST in public mode.")
+	}
+
+	if config.PrestConf.Debug {
+		nlog.DebugMode = config.PrestConf.Debug
+		nlog.Warningln("You are running pREST in debug mode.")
+	}
+	l.Printf("listening on %s and serving on %s", config.PrestConf.SocketPath,config.PrestConf.ContextPath)
+	if err := os.RemoveAll(config.PrestConf.SocketPath); err != nil {
+        l.Fatal(err)
+    }
+	unixListener,err := net.Listen("unix",config.PrestConf.SocketPath)
+	if err!=nil{
+		l.Fatal(err)
+	}
+	defer unixListener.Close()
+	l.Fatal(http.Serve(unixListener,mux))
+
 }
